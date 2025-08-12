@@ -4,6 +4,15 @@ import { useParams, useRouter } from 'next/navigation';
 import type { ILocalAudioTrack, ILocalVideoTrack, IAgoraRTCRemoteUser, ILocalTrack } from 'agora-rtc-sdk-ng';
 import axios from 'axios';
 
+// Prefer H264 on iOS/Safari for better compatibility across devices
+function getPreferredCodec(): 'h264' | 'vp8' {
+  if (typeof navigator === 'undefined') return 'vp8';
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPad|iPhone|iPod/.test(ua);
+  const isSafari = /^((?!chrome|android).)*safari/i.test(ua);
+  return (isIOS || isSafari) ? 'h264' : 'vp8';
+}
+
 export default function CallPage() {
   const params = useParams<{ room: string }>();
   const room = params?.room;
@@ -55,7 +64,8 @@ export default function CallPage() {
   async function join() {
     if (isJoining || joined) return;
     setIsJoining(true);
-    const uid = Math.floor(Math.random()*100000);
+    // Use a wide UID range to avoid collisions across devices
+    const uid = Math.floor(Math.random() * 1_000_000_000);
     // get token
     const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
     const usingNgrok = /ngrok/.test(hostname);
@@ -93,6 +103,7 @@ export default function CallPage() {
     uidRef.current = uid;
 
     const { default: AgoraRTC } = await import('agora-rtc-sdk-ng');
+    const codec = getPreferredCodec();
     // Silence SDK logs and disable telemetry upload to avoid network calls to statscollector
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
@@ -100,7 +111,7 @@ export default function CallPage() {
     // eslint-disable-next-line @typescript-eslint/ban-ts-comment
     // @ts-ignore
     AgoraRTC.enableLogUpload?.(false);
-    const client = clientRef.current ?? (clientRef.current = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' }));
+    const client = clientRef.current ?? (clientRef.current = AgoraRTC.createClient({ mode: 'rtc', codec }));
     if (client.connectionState && client.connectionState !== 'DISCONNECTED') {
       setIsJoining(false);
       return;
@@ -140,19 +151,44 @@ export default function CallPage() {
         try { cam.play(localVideoRef.current); } catch {}
       }
 
+      const playRemoteVideo = async (user: IAgoraRTCRemoteUser) => {
+        const remotePlayerContainer = document.createElement('div');
+        remotePlayerContainer.id = `player-${user.uid}`;
+        remotePlayerContainer.style.width = '640px';
+        remotePlayerContainer.style.height = '360px';
+        remotePlayerContainer.style.position = 'relative';
+        remoteVideoRef.current?.appendChild(remotePlayerContainer);
+        try {
+          user.videoTrack?.play(remotePlayerContainer);
+        } catch (e) {
+          const prompt = document.createElement('button');
+          prompt.textContent = 'Tap to view remote video';
+          prompt.style.position = 'absolute';
+          prompt.style.inset = '0';
+          prompt.style.margin = 'auto';
+          prompt.style.height = '44px';
+          prompt.style.width = '200px';
+          prompt.style.borderRadius = '10px';
+          prompt.style.border = '1px solid rgba(255,255,255,.18)';
+          prompt.style.background = '#1f2937';
+          prompt.style.color = '#e5e7eb';
+          prompt.style.cursor = 'pointer';
+          prompt.onclick = () => {
+            try { user.videoTrack?.play(remotePlayerContainer); } catch {}
+            try { remotePlayerContainer.removeChild(prompt); } catch {}
+          };
+          remotePlayerContainer.appendChild(prompt);
+        }
+      };
+
       if (!eventsBoundRef.current) {
         client.on('user-published', async (user: IAgoraRTCRemoteUser, mediaType: 'audio' | 'video') => {
           await client.subscribe(user, mediaType);
           if (mediaType === 'video') {
-            const remotePlayerContainer = document.createElement('div');
-            remotePlayerContainer.id = `player-${user.uid}`;
-            remotePlayerContainer.style.width = '640px';
-            remotePlayerContainer.style.height = '360px';
-            remoteVideoRef.current?.appendChild(remotePlayerContainer);
-            user.videoTrack?.play(remotePlayerContainer);
+            await playRemoteVideo(user);
           }
           if (mediaType === 'audio') {
-            user.audioTrack?.play();
+            try { user.audioTrack?.play(); } catch {}
           }
         });
 
@@ -162,6 +198,21 @@ export default function CallPage() {
         });
         eventsBoundRef.current = true;
       }
+
+      // Also handle any users who were already published before we bound events
+      try {
+        const existing = (client as any).remoteUsers || [];
+        for (const user of existing) {
+          if ((user as any).hasVideo) {
+            try { await client.subscribe(user, 'video'); } catch {}
+            await playRemoteVideo(user as IAgoraRTCRemoteUser);
+          }
+          if ((user as any).hasAudio) {
+            try { await client.subscribe(user, 'audio'); } catch {}
+            try { (user as any).audioTrack?.play(); } catch {}
+          }
+        }
+      } catch {}
 
       setJoined(true);
     } finally {
@@ -321,7 +372,7 @@ export default function CallPage() {
           return;
         }
 
-        const screenClient = AgoraRTC.createClient({ mode: 'rtc', codec: 'vp8' });
+        const screenClient = AgoraRTC.createClient({ mode: 'rtc', codec: getPreferredCodec() });
         screenClientRef.current = screenClient;
         await screenClient.join(appId, channel, token2, screenUid);
         await screenClient.publish([actualScreenTrack]);
