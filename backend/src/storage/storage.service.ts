@@ -8,6 +8,7 @@ export type RoomRecord = {
   link: string;
   createdAt: number;
   appointmentId?: number | null;
+  userTypeId: number;
 };
 
 @Injectable()
@@ -22,6 +23,7 @@ export class StorageService {
         endTimeMs: BigInt(record.endTimeMs),
         link: record.link,
         appointmentId: record.appointmentId != null ? BigInt(record.appointmentId) : null,
+        userTypeId: record.userTypeId,
       },
       create: {
         roomId: record.roomId,
@@ -30,6 +32,7 @@ export class StorageService {
         link: record.link,
         createdAt: BigInt(record.createdAt),
         appointmentId: record.appointmentId != null ? BigInt(record.appointmentId) : null,
+        userTypeId: record.userTypeId,
       },
     });
   }
@@ -44,6 +47,7 @@ export class StorageService {
       link: row.link,
       createdAt: Number(row.createdAt),
       appointmentId: row.appointmentId != null ? Number(row.appointmentId) : null,
+      userTypeId: row.userTypeId,
     };
   }
 }

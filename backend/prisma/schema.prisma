@@ -14,6 +14,10 @@ model Room {
   link        String @db.VarChar(512)
   createdAt   BigInt
   appointmentId BigInt? @map("appointment_id") @db.BigInt
+  userTypeId  Int    @map("user_type_id") @db.SmallInt
+  
+  userType    UserType @relation(fields: [userTypeId], references: [id])
+  appointment Appointment? @relation(fields: [appointmentId], references: [id])
 }
 
 model UserType {
@@ -24,6 +28,7 @@ model UserType {
   deletedAt  DateTime? @map("deleted_at")
 
   users      User[]
+  rooms      Room[]
 
   @@map("user_types")
 }
@@ -53,7 +58,68 @@ model User {
 
   userType      UserType  @relation(fields: [userTypeId], references: [id])
 
+  // Relations
+  patientAppointments Appointment[] @relation("PatientAppointments")
+  userAppointments    Appointment[] @relation("UserAppointments")
+
   @@map("users")
+}
+
+model Appointment {
+  id                  BigInt    @id @default(autoincrement()) @db.BigInt
+  uuid                String    @unique @db.Char(36) // UUID length
+  slotId              BigInt?   @map("slot_id") @db.BigInt
+  doctorPracticeId    BigInt?   @map("doctor_practice_id") @db.BigInt
+  patientId           BigInt?   @map("patient_id") @db.BigInt
+  userId              BigInt?   @map("user_id") @db.BigInt
+  status              Int       @default(0) @db.SmallInt
+  fee                 Int?
+  discount            Int?
+  paymentStatus       Int?      @map("payment_status") @db.SmallInt
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime? @map("updated_at")
+  deletedAt           DateTime? @map("deleted_at")
+
+  // Relations
+  rooms               Room[]
+  slot                AppointmentSlot? @relation(fields: [slotId], references: [id])
+  doctorPractice      DoctorPractice? @relation(fields: [doctorPracticeId], references: [id])
+  patient             User? @relation("PatientAppointments", fields: [patientId], references: [id])
+  user                User? @relation("UserAppointments", fields: [userId], references: [id])
+
+  @@map("appointments")
+}
+
+model AppointmentSlot {
+  id          BigInt    @id @default(autoincrement()) @db.BigInt
+  startTime   DateTime  @map("start_time")
+  endTime     DateTime  @map("end_time")
+  isAvailable Boolean   @default(true) @map("is_available")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  // Relations
+  appointments Appointment[]
+
+  @@map("appointment_slots")
+}
+
+model DoctorPractice {
+  id          BigInt    @id @default(autoincrement()) @db.BigInt
+  name        String    @db.VarChar(255)
+  address     String?   @db.Text
+  phone       String?   @db.VarChar(50)
+  email       String?   @db.VarChar(255)
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+  deletedAt   DateTime? @map("deleted_at")
+
+  // Relations
+  appointments Appointment[]
+
+  @@map("doctor_practices")
 }
 
 model AppointmentStatus {
@@ -63,7 +129,7 @@ model AppointmentStatus {
   description String?   @db.Text
   isActive    Boolean   @default(true) @map("is_active")
   createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @updatedAt @map("updated_at")
+  updatedAt   DateTime? @map("updated_at")
   deletedAt   DateTime? @map("deleted_at")
 
   @@map("appointment_statuses")

@@ -22,6 +22,18 @@ export default function LobbyPage() {
   const [nowMs, setNowMs] = useState<number>(Date.now());
   const [canJoin, setCanJoin] = useState<boolean>(true);
   const [ended, setEnded] = useState<boolean>(false);
+  const [userType, setUserType] = useState<string>('');
+  const [appointmentId, setAppointmentId] = useState<number | null>(null);
+
+  // Get userType from URL query parameter (doctor|patient)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const userTypeParam = urlParams.get('userType');
+      const normalized = (userTypeParam || '').toLowerCase();
+      if (normalized === 'doctor' || normalized === 'patient') setUserType(normalized);
+    }
+  }, []);
 
   // Prepare preview and fetch schedule
   useEffect(() => {
@@ -36,6 +48,14 @@ export default function LobbyPage() {
         if (s?.startTimeMs) setStartTimeMs(Number(s.startTimeMs));
         if (s?.endTimeMs) setEndTimeMs(Number(s.endTimeMs));
         if (s?.now) setNowMs(Number(s.now));
+        // Prefer explicit URL userType; only fallback to backend if valid and URL didn't set it
+        setUserType((prev) => {
+          if (prev === 'doctor' || prev === 'patient') return prev;
+          const backendType = (s?.userType || '').toLowerCase();
+          if (backendType === 'doctor' || backendType === 'patient') return backendType;
+          return prev || '';
+        });
+        if (s?.appointmentId) setAppointmentId(s.appointmentId);
       } catch {
         setStartTimeMs(null);
         setEndTimeMs(null);
@@ -106,18 +126,46 @@ export default function LobbyPage() {
     try { previewVideoRef.current?.stop(); previewVideoRef.current?.close(); } catch {}
     previewAudioRef.current = null;
     previewVideoRef.current = null;
+    // Both doctor and patient go to the same call room
     router.push(`/call/${room}`);
   }
+
+  const getUserTypeIcon = () => {
+    if (userType === 'doctor') return '👨‍⚕️';
+    if (userType === 'patient') return '🏥';
+    return '🎥';
+  };
+
+  const getUserTypeTitle = () => {
+    if (userType === 'doctor') return 'Doctor';
+    if (userType === 'patient') return 'Patient';
+    return 'Lobby';
+  };
+
+  const getSharedRoomInfo = () => {
+    return (
+      <div className="shared-room-info">
+        <h4>🔄 Shared Video Call Room</h4>
+        <p>Both doctor and patient will join the same video call room: <strong>{room}</strong></p>
+        <p>This ensures you can see and hear each other during the appointment.</p>
+      </div>
+    );
+  };
 
   return (
     <div className="call-container">
       <header className="call-header">
-        <h2 className="title">Lobby — Room: <span className="pill">{room}</span></h2>
+        <h2 className="title">
+          {getUserTypeIcon()} {getUserTypeTitle()} Lobby — Room: <span className="pill">{room}</span>
+        </h2>
+        {appointmentId && (
+          <p className="appointment-info">Appointment ID: {appointmentId}</p>
+        )}
       </header>
 
       <section className="grid">
         <div className="panel">
-          <h4 className="panel-title">Preview</h4>
+          <h4 className="panel-title">Camera & Microphone Preview</h4>
           <div ref={localVideoRef} className="video-box" />
           <div className="preview-controls">
             <button className="btn" onClick={async () => { const next = !micEnabled; setMicEnabled(next); try { await previewAudioRef.current?.setEnabled(next); } catch {} }}>{micEnabled ? 'Mute Mic' : 'Unmute Mic'}</button>
@@ -128,7 +176,7 @@ export default function LobbyPage() {
           </div>
         </div>
         <div className="panel">
-          <h4 className="panel-title">Status</h4>
+          <h4 className="panel-title">Meeting Status</h4>
           {startTimeMs ? (
             <div className="waiting">
               {ended ? (
@@ -139,12 +187,14 @@ export default function LobbyPage() {
                   <Countdown target={startTimeMs} now={nowMs} />
                 </>
               ) : (
-                <p>Meeting is live.</p>
+                <p className="text-success">Meeting is live. You can join now!</p>
               )}
             </div>
           ) : (
             <p>No schedule found. You can join anytime.</p>
           )}
+
+          {getSharedRoomInfo()}
 
           <button className="btn btn-primary" onClick={goToCall} disabled={!canJoin || isPreparing}>
             {isPreparing ? 'Opening…' : canJoin ? 'Join Meeting' : 'Join (disabled until start)'}
@@ -155,7 +205,8 @@ export default function LobbyPage() {
       <style jsx>{`
         .call-container { min-height: 100vh; padding: 24px clamp(16px, 4vw, 48px); background: linear-gradient(180deg, #0f172a 0%, #0b1022 100%); color: #e5e7eb; }
         .call-header { margin-bottom: 16px; }
-        .title { font-size: 22px; font-weight: 600; }
+        .title { font-size: 22px; font-weight: 600; margin-bottom: 8px; }
+        .appointment-info { color: #94a3b8; font-size: 14px; margin: 0; }
         .pill { display: inline-block; background: rgba(59,130,246,.15); color: #93c5fd; border: 1px solid rgba(59,130,246,.35); padding: 2px 8px; border-radius: 999px; font-size: 14px; }
         .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 16px; align-items: start; }
         .panel { grid-column: span 6; }
@@ -166,12 +217,38 @@ export default function LobbyPage() {
         .meter { position: relative; width: 120px; height: 8px; background: #111827; border-radius: 6px; overflow: hidden; border: 1px solid rgba(255,255,255,.1); }
         .meter-fill { height: 100%; background: linear-gradient(90deg, #34d399, #10b981); transition: width .15s linear; }
         .text-warn { color: #fca5a5; }
+        .text-success { color: #10b981; }
         .btn { padding: 10px 14px; border-radius: 10px; background: #1f2937; color: #e5e7eb; border: 1px solid rgba(255,255,255,.08); transition: transform .06s ease, background .2s ease, border-color .2s; cursor: pointer; }
         .btn:hover { transform: translateY(-1px); border-color: rgba(255,255,255,.18); }
         .btn:active { transform: translateY(0); }
         .btn:disabled { opacity: .6; cursor: not-allowed; transform: none; }
         .btn-primary { background: #2563eb; border-color: #1d4ed8; }
         .btn-primary:hover { background: #1d4ed8; }
+
+        .shared-room-info {
+          background: rgba(59, 130, 246, 0.1);
+          border: 1px solid rgba(59, 130, 246, 0.2);
+          border-radius: 8px;
+          padding: 16px;
+          margin: 16px 0;
+        }
+
+        .shared-room-info h4 {
+          margin: 0 0 12px 0;
+          color: #60a5fa;
+          font-size: 1rem;
+        }
+
+        .shared-room-info p {
+          margin: 8px 0;
+          color: #cbd5e1;
+          font-size: 14px;
+        }
+
+        .shared-room-info strong {
+          color: #60a5fa;
+          font-family: monospace;
+        }
       `}</style>
     </div>
   );
