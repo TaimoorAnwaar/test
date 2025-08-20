@@ -1,92 +1,68 @@
-# 🚀 Backend Setup Guide
+# Backend Setup Guide
 
 ## Prerequisites
-- Node.js 18+ installed
-- MySQL database running
-- Agora.io account and credentials
 
-## Quick Setup
+- Node.js (v18 or higher)
+- npm or yarn
+- PostgreSQL database
 
-### 1. Install Dependencies
-```bash
-npm install
-```
+## Installation
 
-### 2. Environment Configuration
-```bash
-# Copy the example environment file
-cp env.example .env
-
-# Edit .env with your actual values
-# - DATABASE_URL: Your MySQL connection string
-# - AGORA_APP_ID: Your Agora.io App ID
-# - AGORA_APP_CERTIFICATE: Your Agora.io App Certificate
-# - FRONTEND_BASE_URL: Your frontend URL (default: http://localhost:3001)
-```
-
-### 3. Database Setup
-```bash
-# Generate Prisma client
-npx prisma generate
-
-# Run database migrations (if any)
-npx prisma migrate dev
-
-# Seed the database with test data
-npm run seed:test
-```
-
-### 4. Start Development Server
-```bash
-npm run start:dev
-```
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Prisma Client Not Generated**
+1. **Install dependencies:**
    ```bash
+   npm install
+   ```
+
+2. **Environment Configuration:**
+   - Copy `env.example` to `.env`
+   - Update database connection string
+   - Set your Agora App ID and Secret
+
+3. **Database Setup:**
+   ```bash
+   # Generate Prisma client
    npx prisma generate
+   
+   # Run migrations
+   npx prisma migrate dev
+   
+   # Seed database
+   npm run seed
    ```
 
-2. **Database Connection Error**
-   - Verify MySQL is running
-   - Check DATABASE_URL in .env
-   - Ensure database exists
-
-3. **Missing Dependencies**
+4. **Start Development Server:**
    ```bash
-   npm install
+   npm run start:dev
    ```
 
-4. **TypeScript Errors**
-   ```bash
-   # Clean and reinstall
-   rm -rf node_modules package-lock.json
-   npm install
-   ```
+## Available Scripts
 
-## API Testing
+- `npm run build` - Build the application
+- `npm run start` - Start production server
+- `npm run start:dev` - Start development server with hot reload
+- `npm run test` - Run tests
+- `npm run test:e2e` - Run end-to-end tests
 
-Once running, test the endpoints:
+## API Endpoints
 
+- `POST /agora/token` - Generate Agora token for video calls
+- `POST /agora/mark-no-show` - Mark appointment as no-show
+
+## Database Schema
+
+The application uses Prisma with the following main models:
+- User (doctors and patients)
+- Appointment
+- AppointmentStatus
+- DoctorPractice
+- AppointmentSystem
+- WorkingDay
+- AppointmentSlot
+
+## Testing
+
+Run the test suite:
 ```bash
-# Create appointment rooms
-curl -X POST http://localhost:3000/agora/create-appointment-rooms \
-  -H "Content-Type: application/json" \
-  -d '{"appointmentId": 123, "durationMinutes": 60}'
-
-# Get room schedule
-curl "http://localhost:3000/agora/schedule?channel=roomId"
-
-# Get Agora token
-curl "http://localhost:3000/agora/token?channel=roomId&uid=123"
+npm run test
+npm run test:e2e
 ```
-
-## Development
-
-- **Watch Mode**: `npm run start:dev`
-- **Debug Mode**: `npm run start:debug`
-- **Build**: `npm run build`
-- **Production**: `npm run start:prod`

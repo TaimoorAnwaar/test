@@ -62,6 +62,24 @@ export class AgoraService {
   async createRoom(startTimeMs: number, endTimeMs: number, userTypeId: number, appointmentId?: number) {
     const roomId = uuidv4().split('-')[0];
     
+    // Validate appointment FK (avoid FK errors if an invalid appointmentId is passed)
+    let effectiveAppointmentId: bigint | null = null;
+    if (typeof appointmentId === 'number' && Number.isFinite(appointmentId)) {
+      try {
+        const existing = await this.prisma.appointment.findUnique({
+          where: { id: BigInt(appointmentId) },
+          select: { id: true },
+        });
+        if (existing) {
+          effectiveAppointmentId = BigInt(appointmentId);
+        } else {
+          console.warn('[AgoraService] appointmentId not found, saving room without FK:', appointmentId);
+        }
+      } catch (e) {
+        console.warn('[AgoraService] appointment lookup failed, saving room without FK:', appointmentId, e);
+      }
+    }
+
     // Create room in database
     const room = await this.prisma.room.create({
       data: {
@@ -70,7 +88,7 @@ export class AgoraService {
         endTimeMs: BigInt(endTimeMs),
         link: '', // Will be set after creation
         createdAt: BigInt(Date.now()),
-        appointmentId: appointmentId ? BigInt(appointmentId) : null,
+        appointmentId: effectiveAppointmentId,
         userTypeId,
       },
     });
@@ -170,6 +188,17 @@ export class AgoraService {
     return await this.prisma.room.update({
       where: { roomId },
       data: { link }
+    });
+  }
+
+  async setAppointmentNoShowStatus(appointmentId: number, whoWaited: 'doctor' | 'patient') {
+    // Mapping based on requirement:
+    // - If patient waited > 15 mins → Doctor Not Showed Up
+    // - If doctor waited > 15 mins → Patient Not Showed Up
+    const statusId = whoWaited === 'patient' ? 12 /* DOCTOR_NO_SHOW */ : 10 /* PATIENT_NO_SHOW */;
+    return await this.prisma.appointment.update({
+      where: { id: BigInt(appointmentId) },
+      data: { status: statusId, updatedAt: new Date() }
     });
   }
 }

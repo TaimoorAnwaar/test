@@ -24,6 +24,7 @@ export default function LobbyPage() {
   const [ended, setEnded] = useState<boolean>(false);
   const [userType, setUserType] = useState<string>('');
   const [appointmentId, setAppointmentId] = useState<number | null>(null);
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
 
   // Get userType from URL query parameter (doctor|patient)
   useEffect(() => {
@@ -102,7 +103,9 @@ export default function LobbyPage() {
 
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
-    return () => clearInterval(timer);
+    const start = Date.now();
+    const elapsed = setInterval(() => setElapsedMs(Date.now() - start), 1000);
+    return () => { clearInterval(timer); clearInterval(elapsed); };
   }, []);
 
   useEffect(() => {
@@ -126,8 +129,21 @@ export default function LobbyPage() {
     try { previewVideoRef.current?.stop(); previewVideoRef.current?.close(); } catch {}
     previewAudioRef.current = null;
     previewVideoRef.current = null;
-    // Both doctor and patient go to the same call room
-    router.push(`/call/${room}`);
+    // Both doctor and patient go to the same call room, but preserve userType
+    router.push(`/call/${room}?userType=${userType}`);
+  }
+
+  async function markNoShowAndLeave() {
+    try {
+      if (!appointmentId) return;
+      const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
+      const api = process.env.NEXT_PUBLIC_API_URL || `${window.location.protocol}//${hostname}:3000`;
+      const whoWaited = userType === 'doctor' ? 'doctor' : 'patient';
+      await axios.post(`${api}/agora/mark-no-show`, { appointmentId, whoWaited });
+      router.push('/');
+    } catch (e) {
+      alert('Failed to mark no-show.');
+    }
   }
 
   const getUserTypeIcon = () => {
@@ -199,6 +215,12 @@ export default function LobbyPage() {
           <button className="btn btn-primary" onClick={goToCall} disabled={!canJoin || isPreparing}>
             {isPreparing ? 'Opening…' : canJoin ? 'Join Meeting' : 'Join (disabled until start)'}
           </button>
+
+          {elapsedMs > 15 * 60 * 1000 && (
+            <button className="btn" style={{marginLeft:10}} onClick={markNoShowAndLeave}>
+              {userType === 'doctor' ? 'Leave — Patient Not Showed up' : 'Leave — Doctor Not Showed up'}
+            </button>
+          )}
         </div>
       </section>
 

@@ -1,6 +1,7 @@
 "use client";
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import ChatPanel from '../../../components/ChatPanel';
 
 interface AgoraUser {
   uid: string | number;
@@ -49,6 +50,11 @@ export default function CallPage() {
   const [error, setError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<string>('disconnected');
   const [tokenExpiryWarning, setTokenExpiryWarning] = useState(false);
+  const [appointmentId, setAppointmentId] = useState<number | null>(null);
+  const [userType, setUserType] = useState<'doctor' | 'patient' | null>(null);
+  const [callStartMs] = useState<number>(Date.now());
+  const [elapsedMs, setElapsedMs] = useState<number>(0);
+  const [isChatVisible, setIsChatVisible] = useState(false);
   
   // DOM refs
   const localVideoRef = useRef<HTMLDivElement>(null);
@@ -65,7 +71,20 @@ export default function CallPage() {
       // Use setTimeout to debounce rapid state changes
       remoteUsersUpdateTimeoutRef.current = setTimeout(() => {
         if (clientRef.current) {
-          setRemoteUsers([...clientRef.current.remoteUsers]);
+          const currentRemoteUsers = [...clientRef.current.remoteUsers];
+          setRemoteUsers(currentRemoteUsers);
+          
+          // Update remoteVideoActive based on whether any user has an active video track
+          const hasActiveVideo = currentRemoteUsers.some(user => 
+            user.videoTrack && user.videoTrack.isEnabled !== false
+          );
+          setRemoteVideoActive(hasActiveVideo);
+          
+          console.log('🔄 Remote users updated:', {
+            count: currentRemoteUsers.length,
+            hasActiveVideo,
+            users: currentRemoteUsers.map(u => ({ uid: u.uid, hasVideo: !!u.videoTrack }))
+          });
         }
         remoteUsersUpdateTimeoutRef.current = null;
       }, 100);
@@ -152,12 +171,16 @@ export default function CallPage() {
       if (remoteVideoRef.current) {
         remoteVideoRef.current.innerHTML = '';
       }
-      setRemoteVideoActive(false);
+      // Don't immediately set remoteVideoActive to false
+      // Let updateRemoteUsersDebounced handle the state update
     } else if (mediaType === 'audio') {
       // Do not clear the remote video when only audio is unpublished (muted)
       try { (user as any).audioTrack?.stop?.(); } catch {}
     }
-  }, []);
+    
+    // Update remote users state to reflect the current situation
+    updateRemoteUsersDebounced();
+  }, [updateRemoteUsersDebounced]);
 
   const handleUserJoined = useCallback((user: AgoraUser) => {
     console.log('👤 User joined:', user.uid);
@@ -172,8 +195,9 @@ export default function CallPage() {
       remoteVideoRef.current.innerHTML = '';
       console.log('✅ Remote video cleared when user left');
     }
-    setRemoteVideoActive(false);
     
+    // Only set remoteVideoActive to false if this was the last user
+    // The updateRemoteUsersDebounced will handle updating the state properly
     updateRemoteUsersDebounced();
   }, [updateRemoteUsersDebounced]);
 
@@ -312,6 +336,11 @@ export default function CallPage() {
   }, [handleUserPublished, handleUserUnpublished, handleUserJoined, handleUserLeft, handleConnectionStateChange, handleTokenPrivilegeWillExpire, handleTokenPrivilegeDidExpire]);
 
   useEffect(() => {
+    const tick = setInterval(() => setElapsedMs(Date.now() - callStartMs), 1000);
+    return () => clearInterval(tick);
+  }, [callStartMs]);
+
+  useEffect(() => {
     if (!room) return;
 
     // Only run on client side
@@ -359,7 +388,7 @@ export default function CallPage() {
           throw new Error(`Backend error: ${response.status} - ${errorText}`);
         }
         
-        const { token, expiresIn } = await response.json();
+        const { token, expiresIn, appointmentId: apptId, userType: serverUserType } = await response.json();
         
         if (!token || typeof token !== 'string' || token.trim().length === 0) {
           throw new Error('Invalid token received from backend');
@@ -369,6 +398,19 @@ export default function CallPage() {
         if (expiresIn && typeof expiresIn === 'number') {
           scheduleTokenRenewal(expiresIn);
         }
+        setAppointmentId(typeof apptId === 'number' ? apptId : null);
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlType = (urlParams.get('userType') || '').toLowerCase();
+        const type: 'doctor' | 'patient' | null = urlType === 'doctor' || urlType === 'patient' ? (urlType as any) : (serverUserType === 'doctor' || serverUserType === 'patient' ? (serverUserType as any) : null);
+        setUserType(type);
+        
+        // Debug logging for userType detection
+        console.log('🔍 UserType Detection:', {
+          urlType,
+          serverUserType,
+          finalType: type,
+          fullUrl: window.location.href
+        });
         
         // Validate required data - Fixed: Only check if it's a non-empty string
         if (!appId || !token) {
@@ -546,6 +588,25 @@ export default function CallPage() {
     }
   }, [cleanupAgora, router]);
 
+  const leaveNoShow = useCallback(async () => {
+    try {
+      if (!appointmentId || !userType) return leaveCall();
+      const elapsed = Date.now() - callStartMs;
+      if (elapsed < 15 * 60 * 1000) return leaveCall();
+      const envBase = (process.env.NEXT_PUBLIC_API_URL || '').trim();
+      const shouldUseEnv = envBase && !/localhost|127\.0\.0\.1/.test(envBase);
+      const api = shouldUseEnv ? envBase : '';
+      await fetch(`${api}/agora/mark-no-show`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appointmentId, whoWaited: userType })
+      });
+    } catch {}
+    finally {
+      await leaveCall();
+    }
+  }, [appointmentId, userType, callStartMs, leaveCall]);
+
   // Error display
   if (error) {
     return (
@@ -579,69 +640,140 @@ export default function CallPage() {
 
   return (
     <div className="call-container">
-      {/* Token expiry warning */}
-      {tokenExpiryWarning && (
-        <div className="token-warning">
-          ⚠️ Token expiring soon, renewing...
-        </div>
-      )}
-      
-      {/* Connection status */}
-      <div className="connection-status-bar">
-        Status: {connectionState}
-      </div>
-
-      {/* Video Layout */}
-      <div className="stage">
-        <div className="remote-canvas" ref={remoteVideoRef} />
-        {!remoteVideoActive && (
-          <div className="remote-placeholder">
-            <div className="remote-avatar">👤</div>
-            <div className="remote-text">Remote camera is off</div>
+      {/* Header Section */}
+      <header className="call-header">
+        {/* Token expiry warning */}
+        {tokenExpiryWarning && (
+          <div className="token-warning">
+            ⚠️ Token expiring soon, renewing...
           </div>
         )}
-        {remoteUsers.length === 0 && (
-          <div className="no-remote-user">
-            <div className="no-user-icon">👤</div>
-            <p>Waiting for other participant...</p>
+        
+        {/* Connection status */}
+        <div className="connection-status-bar">
+          Status: {connectionState}
+        </div>
+      </header>
+
+      {/* Main Video Call Section */}
+      <main className={`call-main ${isChatVisible ? 'chat-visible' : ''}`}>
+        {/* Video Layout */}
+        <div className="stage">
+          <div className="remote-canvas" ref={remoteVideoRef} />
+          
+          {/* Show different messages based on remote user status */}
+          {(() => {
+            // Debug logging to understand the state
+            console.log('🔍 Remote user status:', {
+              remoteUsersCount: remoteUsers.length,
+              remoteVideoActive: remoteVideoActive,
+              remoteUsers: remoteUsers.map(u => u.uid)
+            });
+            
+            // First check: Has any remote user joined the call?
+            if (remoteUsers.length === 0) {
+              // No remote user has joined yet
+              return (
+                <div className="no-remote-user">
+                  <div className="no-user-icon">👤</div>
+                  <p>Remote user has not joined yet</p>
+                </div>
+              );
+            }
+            
+            // Second check: Remote user has joined, but is their camera off?
+            if (!remoteVideoActive) {
+              // Remote user has joined but camera is off
+              return (
+                <div className="remote-placeholder">
+                  <div className="remote-avatar">👤</div>
+                  <div className="remote-text">Remote camera is off</div>
+                </div>
+              );
+            }
+            
+            // Remote user has joined and camera is active - no message needed
+            return null;
+          })()}
+          <div className={`local-pip ${!isVideoEnabled ? 'off' : ''}`}>
+            <div className="local-pip-video" ref={localVideoRef} />
+            {!isVideoEnabled && (
+              <div className="pip-placeholder">Camera Off</div>
+            )}
           </div>
-        )}
-        <div className={`local-pip ${!isVideoEnabled ? 'off' : ''}`}>
-          <div className="local-pip-video" ref={localVideoRef} />
-          {!isVideoEnabled && (
-            <div className="pip-placeholder">Camera Off</div>
+        </div>
+
+        {/* Control Bar */}
+        <div className="controls">
+          <button 
+            className={`cbtn mic ${isAudioEnabled ? 'on' : 'off'}`}
+            onClick={toggleAudio}
+            title={isAudioEnabled ? 'Mute microphone' : 'Unmute microphone'}
+          >
+            {isAudioEnabled ? (
+              <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+            ) : (
+              <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3z"/></svg>
+            )}
+          </button>
+          <button 
+            className={`cbtn cam ${isVideoEnabled ? 'on' : 'off'}`}
+            onClick={toggleVideo}
+            title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
+          >
+            {isVideoEnabled ? (
+              <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
+            ) : (
+              <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.48V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4.48l4 3.98v-13.96L18 10.48zM12 12l3-3 3 3H6l3 3 3-3z"/></svg>
+            )}
+          </button>
+          <button 
+            className={`cbtn chat ${isChatVisible ? 'on' : 'off'}`}
+            onClick={() => setIsChatVisible(!isChatVisible)}
+            title={isChatVisible ? 'Hide chat' : 'Show chat'}
+          >
+            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M20 2H4c-1.1 0-1.99.9-1.99 2L2 22l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 9h12v2H6V9zm8 5H6v-2h8v2zm4-6H6V6h12v2z"/>
+            </svg>
+          </button>
+          <button className="cbtn end" onClick={leaveCall} title="End call">
+            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+          </button>
+          {appointmentId && userType && elapsedMs > 15 * 60 * 1000 && (
+            <button className="cbtn end" onClick={leaveNoShow} title={userType === 'doctor' ? 'Leave — Patient Not Showed up' : 'Leave — Doctor Not Showed up'}>
+              <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.34 8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
+            </button>
           )}
         </div>
-      </div>
 
-      {/* Control Bar */}
-      <div className="controls">
-        <button 
-          className={`cbtn mic ${isAudioEnabled ? 'on' : 'off'}`}
-          onClick={toggleAudio}
-          title={isAudioEnabled ? 'Mute microphone' : 'Unmute microphone'}
-        >
-          {isAudioEnabled ? (
-            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
-          ) : (
-            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3z"/></svg>
-          )}
-        </button>
-        <button 
-          className={`cbtn cam ${isVideoEnabled ? 'on' : 'off'}`}
-          onClick={toggleVideo}
-          title={isVideoEnabled ? 'Turn off camera' : 'Turn on camera'}
-        >
-          {isVideoEnabled ? (
-            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>
-          ) : (
-            <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M18 10.48V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2v-4.48l4 3.98v-13.96L18 10.48zM12 12l3-3 3 3H6l3 3 3-3z"/></svg>
-          )}
-        </button>
-        <button className="cbtn end" onClick={leaveCall} title="End call">
-          <svg className="cicon" viewBox="0 0 24 24" fill="currentColor"><path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08c-.18-.17-.29-.42-.29-.7 0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z"/></svg>
-        </button>
-      </div>
+        {/* Chat Panel */}
+        {userType && (
+          <div className="chat-wrapper">
+            <ChatPanel
+              roomId={room}
+              userType={userType}
+              userId={uidRef.current?.toString() || 'unknown'}
+              isVisible={isChatVisible}
+              onToggle={() => setIsChatVisible(!isChatVisible)}
+              remoteUserIds={remoteUsers.map(user => user.uid.toString())}
+            />
+          </div>
+        )}
+      </main>
+
+      {/* Footer Section */}
+      <footer className="call-footer">
+        <div className="footer-content">
+          <div className="footer-brand">
+            <span className="brand-name">🏥 MARHAM</span>
+            <span className="brand-tagline">Pakistan's most trusted healthcare platform</span>
+          </div>
+          <div className="footer-info">
+            <span className="call-duration">Duration: {Math.floor(elapsedMs / 1000 / 60)}:{(Math.floor(elapsedMs / 1000) % 60).toString().padStart(2, '0')}</span>
+            <span className="room-id">Room: {room}</span>
+          </div>
+        </div>
+      </footer>
 
       <style jsx>{`
         .call-container {
@@ -654,18 +786,92 @@ export default function CallPage() {
           display: flex;
           flex-direction: column;
           overflow: hidden;
+          -webkit-tap-highlight-color: transparent;
         }
 
-        .stage { position: relative; flex: 1; background: #000; }
-        .remote-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
-        .remote-canvas > div, .remote-canvas video { width: 100% !important; height: 100% !important; object-fit: cover; }
+        /* Use dynamic viewport height when supported to avoid browser UI collapsing issues */
+        @supports (height: 100dvh) {
+          .call-container { height: 100dvh; }
+        }
+
+        /* Header Section */
+        .call-header {
+          flex-shrink: 0;
+          background: rgba(15, 23, 42, 0.95);
+          backdrop-filter: blur(10px);
+          border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+          z-index: 40;
+          min-height: 60px;
+          position: relative;
+        }
+
+        /* Main Video Call Section */
+        .call-main {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          position: relative;
+        }
+
+        .stage { position: relative; flex: 1; background: #000; min-width: 0; }
+        .remote-canvas { 
+          position: absolute; 
+          inset: 0; 
+          width: 100%; 
+          height: 100%; 
+          background: #000; 
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .remote-canvas > div, 
+        .remote-canvas video, 
+        .remote-canvas canvas { 
+          width: 100% !important; 
+          height: 100% !important; 
+          object-fit: contain !important; 
+          object-position: center center !important; 
+          background: #000 !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
+          min-width: auto !important;
+          min-height: auto !important;
+        }
+        /* Override any conflicting styles */
+        .remote-canvas video {
+          object-fit: contain !important;
+          object-position: center center !important;
+          width: 100% !important;
+          height: 100% !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
+        }
         .remote-placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; color: #cbd5e1; gap: 8px; background: rgba(0,0,0,.35); z-index: 5; }
         .remote-avatar { font-size: 64px; line-height: 1; }
         .remote-text { font-size: 14px; opacity: .9; }
-        .local-pip { position: absolute; bottom: 20px; right: 20px; width: 140px; height: 220px; border-radius: 16px; overflow: hidden; border: 2px solid rgba(255,255,255,.2); box-shadow: 0 8px 24px rgba(0,0,0,.45); background: #111827; z-index: 15; }
-        @media (max-width: 640px) { .local-pip { width: 104px; height: 168px; top: 12px; right: 12px; bottom: auto; border-radius: 12px; } }
+        .local-pip { position: absolute; bottom: 20px; right: 20px; width: min(26vw, 180px); aspect-ratio: 9 / 16; height: auto; border-radius: 16px; overflow: hidden; border: 2px solid rgba(255,255,255,.2); box-shadow: 0 8px 24px rgba(0,0,0,.45); background: #111827; z-index: 15; }
+        @media (max-width: 640px) { .local-pip { width: min(32vw, 140px); top: 12px; right: 12px; bottom: auto; border-radius: 12px; } }
         .local-pip-video { width: 100%; height: 100%; }
-        .local-pip-video > div, .local-pip-video video { width: 100% !important; height: 100% !important; object-fit: cover; }
+        .local-pip-video > div, 
+        .local-pip-video video { 
+          width: 100% !important; 
+          height: 100% !important; 
+          object-fit: contain !important; 
+          object-position: center center !important; 
+          background: #000 !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
+        }
+        /* Override any conflicting styles for local video */
+        .local-pip-video video {
+          object-fit: contain !important;
+          object-position: center center !important;
+          width: 100% !important;
+          height: 100% !important;
+          max-width: 100% !important;
+          max-height: 100% !important;
+        }
         .local-pip.off .local-pip-video { filter: grayscale(1) brightness(.7); }
         .pip-placeholder { position: absolute; inset: 0; display: grid; place-items: center; color: #cbd5e1; font-size: 12px; background: rgba(0,0,0,.5); }
         .mirror video { transform: scaleX(-1); }
@@ -713,7 +919,7 @@ export default function CallPage() {
           color: #94a3b8;
         }
 
-        .controls { position: absolute; left: 50%; bottom: 20px; transform: translateX(-50%); display: flex; gap: 12px; z-index: 20; }
+        .controls { position: absolute; left: 50%; bottom: 80px; transform: translateX(-50%); display: flex; gap: 12px; z-index: 20; }
         .cbtn { width: 52px; height: 52px; border-radius: 999px; border: none; display: grid; place-items: center; cursor: pointer; transition: transform .15s ease, box-shadow .2s ease, background .2s ease; box-shadow: 0 8px 24px rgba(0,0,0,.35); }
         .cbtn:hover { transform: translateY(-2px); }
         .cbtn:active { transform: translateY(0); }
@@ -722,13 +928,177 @@ export default function CallPage() {
         .cbtn.mic.off { background: #374151; }
         .cbtn.cam.on { background: #3b82f6; }
         .cbtn.cam.off { background: #374151; }
+        .cbtn.chat.on { background: #8b5cf6; }
+        .cbtn.chat.off { background: #374151; }
         .cbtn.end { background: #ef4444; }
 
         /* Mobile layout adjustments */
         @media (max-width: 640px) {
           .controls { left: 0; right: 0; bottom: calc(12px + env(safe-area-inset-bottom)); transform: none; width: 100%; justify-content: space-evenly; padding: 0 12px; }
-          .cbtn { width: 64px; height: 64px; }
-          .cbtn .cicon { width: 26px; height: 26px; }
+          .cbtn { width: 56px; height: 56px; }
+          .cbtn .cicon { width: 24px; height: 24px; }
+        }
+
+        /* Chat wrapper - visible on all screen sizes */
+        .chat-wrapper { 
+          display: block; 
+          min-width: 0; 
+          position: relative;
+        }
+        
+        /* Two-column layout on medium+ screens when chat is visible */
+        @media (min-width: 768px) {
+          .call-main.chat-visible { flex-direction: row; }
+          .chat-wrapper { 
+            width: 320px; 
+            max-width: 35vw; 
+            border-left: 1px solid rgba(255,255,255,.08); 
+          }
+          .controls { left: 50%; right: auto; transform: translateX(-50%); }
+        }
+
+        /* Prevent horizontal scroll on small screens */
+        .call-container, .stage, .remote-canvas { overflow-x: hidden; }
+
+        /* Footer Styles */
+        .call-footer {
+          flex-shrink: 0;
+          background: rgba(15, 23, 42, 0.95);
+          backdrop-filter: blur(10px);
+          border-top: 1px solid rgba(255, 255, 255, 0.1);
+          z-index: 30;
+          padding: 12px 20px;
+          min-height: 60px;
+        }
+
+        .footer-content {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          max-width: 1200px;
+          margin: 0 auto;
+          gap: 20px;
+        }
+
+        .footer-brand {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .brand-name {
+          font-size: 1.1rem;
+          font-weight: 700;
+          color: #60a5fa;
+        }
+
+        .brand-tagline {
+          font-size: 0.8rem;
+          color: #94a3b8;
+        }
+
+        .footer-info {
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 4px;
+        }
+
+        .call-duration {
+          font-size: 0.9rem;
+          color: #e5e7eb;
+          font-weight: 600;
+        }
+
+        .room-id {
+          font-size: 0.8rem;
+          color: #94a3b8;
+          font-family: monospace;
+        }
+
+        /* Responsive header and footer */
+        @media (max-width: 768px) {
+          .call-header {
+            min-height: 50px;
+          }
+
+          .call-footer {
+            padding: 10px 16px;
+            min-height: 50px;
+          }
+
+          .footer-content {
+            flex-direction: column;
+            gap: 8px;
+            text-align: center;
+          }
+
+          .footer-info {
+            align-items: center;
+          }
+
+          .brand-name {
+            font-size: 1rem;
+          }
+
+          .brand-tagline {
+            font-size: 0.75rem;
+          }
+
+          .call-duration {
+            font-size: 0.85rem;
+          }
+          
+          /* Mobile chat panel improvements */
+          .chat-wrapper {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 50;
+            pointer-events: none;
+          }
+          
+          .chat-wrapper > * {
+            pointer-events: auto;
+          }
+        }
+
+          .room-id {
+            font-size: 0.75rem;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .call-header {
+            min-height: 45px;
+          }
+
+          .call-footer {
+            padding: 8px 12px;
+            min-height: 45px;
+          }
+
+          .footer-content {
+            gap: 6px;
+          }
+
+          .brand-name {
+            font-size: 0.9rem;
+          }
+
+          .brand-tagline {
+            font-size: 0.7rem;
+          }
+
+          .call-duration {
+            font-size: 0.8rem;
+          }
+
+          .room-id {
+            font-size: 0.7rem;
+          }
         }
 
         .loading-container {

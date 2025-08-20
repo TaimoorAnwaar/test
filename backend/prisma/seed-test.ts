@@ -5,83 +5,38 @@ const prisma = new PrismaClient();
 async function main() {
   console.log('🌱 Starting test seed...');
 
-  // Create test user types if they don't exist
-  const doctorType = await prisma.userType.upsert({
-    where: { id: 6 },
+  // Create test user
+  const testUser = await prisma.user.upsert({
+    where: { email: 'test@example.com' },
     update: {},
     create: {
-      id: 6,
-      typeName: 'doctor',
+      email: 'test@example.com',
+      name: 'Test User',
+      userType: 'PATIENT',
     },
   });
 
-  const patientType = await prisma.userType.upsert({
-    where: { id: 10 },
+  console.log('✅ Test user created:', testUser);
+
+  // Create test doctor
+  const testDoctor = await prisma.user.upsert({
+    where: { email: 'doctor@example.com' },
     update: {},
     create: {
-      id: 10,
-      typeName: 'patient',
+      email: 'doctor@example.com',
+      name: 'Test Doctor',
+      userType: 'DOCTOR',
     },
   });
 
-  console.log('✅ User types created:', { doctorType, patientType });
+  console.log('✅ Test doctor created:', testDoctor);
 
-  // Create a test appointment
-  const testAppointment = await prisma.appointment.create({
-    data: {
-      uuid: 'test-appointment-123',
-      status: 1, // Assuming 1 is active status
-      fee: 100,
-      paymentStatus: 1, // Assuming 1 is paid
-    },
-  });
-
-  console.log('✅ Test appointment created:', testAppointment);
-
-  // Create test rooms for the appointment
-  const now = Date.now();
-  const startTime = now + 5 * 60 * 1000; // 5 minutes from now
-  const endTime = startTime + 60 * 60 * 1000; // 1 hour duration
-
-  const doctorRoom = await prisma.room.create({
-    data: {
-      roomId: 'test-doctor-room',
-      startTimeMs: BigInt(startTime),
-      endTimeMs: BigInt(endTime),
-      link: `http://localhost:3001/lobby/test-doctor-room`,
-      createdAt: BigInt(now),
-      appointmentId: BigInt(testAppointment.id),
-      userTypeId: 6, // doctor
-    },
-  });
-
-  const patientRoom = await prisma.room.create({
-    data: {
-      roomId: 'test-patient-room',
-      startTimeMs: BigInt(startTime),
-      endTimeMs: BigInt(endTime),
-      link: `http://localhost:3001/lobby/test-patient-room`,
-      createdAt: BigInt(now),
-      appointmentId: BigInt(testAppointment.id),
-      userTypeId: 10, // patient
-    },
-  });
-
-  console.log('✅ Test rooms created:', { doctorRoom, patientRoom });
-
-  console.log('🎯 Test data summary:');
-  console.log(`- Appointment ID: ${testAppointment.id}`);
-  console.log(`- Doctor Room: ${doctorRoom.roomId} (${doctorRoom.link})`);
-  console.log(`- Patient Room: ${patientRoom.roomId} (${patientRoom.link})`);
-  console.log(`- Meeting starts in: ${Math.floor((startTime - now) / 1000 / 60)} minutes`);
-  console.log(`- Meeting duration: 1 hour`);
-
-  console.log('✅ Test seed completed successfully!');
+  console.log('🎉 Test seed completed!');
 }
 
 main()
   .catch((e) => {
-    console.error('❌ Error during test seed:', e);
+    console.error('❌ Test seed failed:', e);
     process.exit(1);
   })
   .finally(async () => {

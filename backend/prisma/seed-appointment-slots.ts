@@ -2,68 +2,64 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-async function seedAppointmentSlots() {
-  console.log('🌱 Seeding appointment slots...');
+async function main() {
+  console.log('🌱 Starting appointment slots seed...');
 
-  const slots: Array<{
-    startTime: Date;
-    endTime: Date;
-    isAvailable: boolean;
-  }> = [];
-  const now = new Date();
+  // Create appointment slots for the next 7 days
+  const startDate = new Date();
+  startDate.setHours(9, 0, 0, 0); // Start at 9 AM
+
+  const slots = [];
   
-  // Generate slots for the next 30 days
-  for (let day = 0; day < 30; day++) {
-    const currentDate = new Date(now);
-    currentDate.setDate(now.getDate() + day);
+  for (let day = 0; day < 7; day++) {
+    const currentDate = new Date(startDate);
+    currentDate.setDate(startDate.getDate() + day);
     
     // Skip weekends (Saturday = 6, Sunday = 0)
-    const dayOfWeek = currentDate.getDay();
-    if (dayOfWeek === 0 || dayOfWeek === 6) continue;
+    if (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+      continue;
+    }
     
-    // Generate slots for each day (9 AM to 5 PM, 30-minute intervals)
+    // Create slots from 9 AM to 5 PM, 30 minutes each
     for (let hour = 9; hour < 17; hour++) {
       for (let minute = 0; minute < 60; minute += 30) {
-        const startTime = new Date(currentDate);
-        startTime.setHours(hour, minute, 0, 0);
+        const slotTime = new Date(currentDate);
+        slotTime.setHours(hour, minute, 0, 0);
         
-        const endTime = new Date(startTime);
-        endTime.setMinutes(endTime.getMinutes() + 30);
-        
-        // Randomly make some slots unavailable (20% chance)
-        const isAvailable = Math.random() > 0.2;
-        
-        const slot = {
-          startTime,
-          endTime,
-          isAvailable,
-        };
-        slots.push(slot);
+        slots.push({
+          startTime: slotTime,
+          endTime: new Date(slotTime.getTime() + 30 * 60 * 1000), // 30 minutes later
+          isAvailable: true,
+          doctorId: 2, // Assuming doctor with ID 2 exists
+        });
       }
     }
   }
 
-  try {
-    // Clear existing slots first
-    await prisma.appointmentSlot.deleteMany({});
-    
-    // Create new slots in batches for better performance
-    const batchSize = 50;
-    for (let i = 0; i < slots.length; i += batchSize) {
-      const batch = slots.slice(i, i + batchSize);
-      await prisma.appointmentSlot.createMany({
-        data: batch,
-      });
-    }
+  // Create the slots in the database
+  const createdSlots = await Promise.all(
+    slots.map(slot =>
+      prisma.appointmentSlot.create({
+        data: {
+          startTime: slot.startTime,
+          endTime: slot.endTime,
+          isAvailable: slot.isAvailable,
+          doctorId: slot.doctorId,
+        },
+      })
+    )
+  );
 
-    console.log('✅ Appointment slots seeded successfully!');
-    console.log(`📊 Created ${slots.length} appointment slots`);
-    console.log(`📅 Slots cover ${Math.ceil(slots.length / 16)} business days`);
-    console.log(`⏰ Time range: 9:00 AM - 5:00 PM (30-minute intervals)`);
-  } catch (error) {
-    console.error('❌ Error seeding appointment slots:', error);
-    throw error;
-  }
+  console.log('✅ Appointment slots created:', createdSlots.length);
+
+  console.log('🎉 Appointment slots seed completed!');
 }
 
-export { seedAppointmentSlots };
+main()
+  .catch((e) => {
+    console.error('❌ Appointment slots seed failed:', e);
+    process.exit(1);
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

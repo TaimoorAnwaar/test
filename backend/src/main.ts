@@ -21,7 +21,7 @@ async function bootstrap() {
 		'http://localhost:3000',
 		'http://127.0.0.1:3001',
 		'http://10.1.0.239:3001',
-		'https://aa4dc4960216.ngrok-free.app',
+		'https://7e424a852e33.ngrok-free.app',
 	];
 	const extraOrigins = (process.env.ALLOWED_ORIGINS || '')
 		.split(',')

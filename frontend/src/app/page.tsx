@@ -6,7 +6,16 @@ export default function HomePage() {
   const [appointmentId, setAppointmentId] = useState('');
   const [startTime, setStartTime] = useState('');
   const [durationMinutes, setDurationMinutes] = useState('60');
-  const [createdRooms, setCreatedRooms] = useState<any>(null);
+  const [createdRooms, setCreatedRooms] = useState<{
+    rooms: {
+      doctor: { roomId: string; userType: string; link: string };
+      patient: { roomId: string; userType: string; link: string };
+    };
+    appointmentId: number;
+    startTimeMs: number;
+    endTimeMs: number;
+    sharedRoomId: string;
+  } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [copyMessage, setCopyMessage] = useState('');
 
@@ -19,7 +28,7 @@ export default function HomePage() {
     try {
       await navigator.clipboard.writeText(text);
       showCopyMessage(message);
-    } catch (err) {
+    } catch {
       // Fallback for older browsers
       const textArea = document.createElement('textarea');
       textArea.value = text;
@@ -173,11 +182,11 @@ export default function HomePage() {
               <div className="room-flow">
                 <div className="flow-step">
                   <span className="step-number">1</span>
-                  <span>Doctor clicks "Join Doctor Lobby"</span>
+                  <span>Doctor clicks &quot;Join Doctor Lobby&quot;</span>
                 </div>
                 <div className="flow-step">
                   <span className="step-number">2</span>
-                  <span>Patient clicks "Join Patient Lobby"</span>
+                  <span>Patient clicks &quot;Join Patient Lobby&quot;</span>
                 </div>
                 <div className="flow-step">
                   <span className="step-number">3</span>
@@ -215,21 +224,6 @@ export default function HomePage() {
             </div>
           </section>
         )}
-
-        <section className="testing-section">
-          <h2>🧪 Test the System</h2>
-          <div className="test-links">
-            <p>You can also test with these pre-created rooms:</p>
-            <div className="test-buttons">
-              <Link href="/lobby/test-doctor-room" className="btn btn-outline">
-                Test Doctor Lobby
-              </Link>
-              <Link href="/lobby/test-patient-room" className="btn btn-outline">
-                Test Patient Lobby
-              </Link>
-            </div>
-          </div>
-        </section>
       </main>
 
       <style jsx>{`
@@ -472,29 +466,6 @@ export default function HomePage() {
           font-size: 14px;
         }
 
-        .testing-section {
-          background: rgba(255, 255, 255, 0.05);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          border-radius: 16px;
-          padding: 32px;
-        }
-
-        .testing-section h2 {
-          margin: 0 0 16px 0;
-          font-size: 1.5rem;
-        }
-
-        .test-links p {
-          margin: 0 0 16px 0;
-          color: #94a3b8;
-        }
-
-        .test-buttons {
-          display: flex;
-          gap: 16px;
-          flex-wrap: wrap;
-        }
-
         .copy-btn {
           padding: 10px 20px;
           font-size: 14px;
@@ -558,11 +529,6 @@ export default function HomePage() {
           display: flex;
           gap: 16px;
           flex-wrap: wrap;
-        }
-
-        .copy-btn {
-          padding: 10px 20px;
-          font-size: 14px;
         }
 
         .copy-notification {

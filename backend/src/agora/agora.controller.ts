@@ -228,4 +228,14 @@ export class AgoraController {
       } : null
     };
   }
+
+  @Post('mark-no-show')
+  async markNoShow(
+    @Body() body: { appointmentId?: number; whoWaited?: 'doctor' | 'patient' }
+  ) {
+    if (!body?.appointmentId) throw new BadRequestException('appointmentId required');
+    const who = body?.whoWaited === 'doctor' ? 'doctor' : 'patient';
+    await this.agora.setAppointmentNoShowStatus(Number(body.appointmentId), who);
+    return { success: true };
+  }
 }
